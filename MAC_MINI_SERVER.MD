@@ -108,6 +108,101 @@ Prowlarr (인덱서 관리)
 - 각 서비스 독립 운영 (포트 분리)
 - 공유기 포트 오픈 없이 외부에서 안전하게 접속
 
+---
+
+### macOS 호스트 vs Docker 내부 구분
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  macOS 호스트 (설치 위치)                                    │
+│                                                             │
+│  /usr/local/bin/cloudflared   ← Homebrew로 설치, 항상 실행  │
+│  ~/actions-runner-app1/       ← GitHub Runner (앱별 폴더)   │
+│  ~/actions-runner-app2/                                     │
+│  ~/docker/                    ← 모든 Docker 설정 모음        │
+│  /Volumes/SSD1/               ← 외장 SSD 1 (미디어)         │
+│  /Volumes/SSD2/               ← 외장 SSD 2 (데이터/백업)    │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Docker (OrbStack)                                  │   │
+│  │                                                     │   │
+│  │  npm (Nginx Proxy Manager)  ← Docker 컨테이너       │   │
+│  │  portainer                  ← Docker 컨테이너       │   │
+│  │  uptime-kuma                ← Docker 컨테이너       │   │
+│  │  jellyfin                   ← Docker 컨테이너       │   │
+│  │  open-webui                 ← Docker 컨테이너       │   │
+│  │  앱1, 앱2, 앱3 ...          ← Docker 컨테이너       │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 맥미니 폴더 구조 설계
+
+```
+~/ (홈 디렉토리 /Users/유저명/)
+│
+├── docker/                          ← 모든 Docker 관련 파일
+│   │
+│   ├── infra/                       ← 공통 인프라 (항상 실행)
+│   │   ├── docker-compose.yml       ← NPM + Portainer + Uptime Kuma
+│   │   ├── npm/
+│   │   │   ├── data/                ← NPM 설정 데이터
+│   │   │   └── letsencrypt/         ← SSL 인증서
+│   │   └── portainer/
+│   │       └── data/
+│   │
+│   ├── media/                       ← 미디어 서버
+│   │   ├── docker-compose.yml       ← Jellyfin + Sonarr + Radarr
+│   │   └── config/
+│   │       ├── jellyfin/
+│   │       ├── sonarr/
+│   │       └── radarr/
+│   │
+│   ├── ai/                          ← AI 비서
+│   │   ├── docker-compose.yml       ← Ollama + Open WebUI
+│   │   └── models/                  ← LLM 모델 저장
+│   │
+│   ├── app1/                        ← 앱 서비스 1 (앱 이름으로 교체)
+│   │   ├── docker-compose.yml
+│   │   └── .env                     ← 환경변수 (Git 제외)
+│   │
+│   ├── app2/                        ← 앱 서비스 2
+│   │   ├── docker-compose.yml
+│   │   └── .env
+│   │
+│   └── db/                          ← 공용 데이터베이스
+│       ├── docker-compose.yml       ← PostgreSQL + Redis
+│       └── data/
+│           ├── postgres/
+│           └── redis/
+│
+├── actions-runner-app1/             ← GitHub Runner (저장소 A)
+├── actions-runner-app2/             ← GitHub Runner (저장소 B)
+├── actions-runner-app3/             ← GitHub Runner (저장소 C)
+│
+└── .cloudflared/                    ← Cloudflare Tunnel 설정
+    ├── config.yml
+    └── <터널ID>.json
+
+/Volumes/
+├── SSD1/                            ← 외장 SSD 1 (미디어 전용)
+│   ├── TV_공유/
+│   │   ├── 영화/
+│   │   ├── 드라마/
+│   │   └── 애니메이션/
+│   └── 개인_비공개/
+│       └── 영화/
+│
+└── SSD2/                            ← 외장 SSD 2 (데이터/백업)
+    ├── db_backup/                   ← DB 백업
+    ├── docker_backup/               ← Docker 볼륨 백업
+    └── files/                       ← 기타 파일
+```
+
+---
+
 ### 도메인 구조 (내도메인.org 기준)
 
 > ✅ Cloudflare 계정 및 도메인 보유 완료
@@ -281,18 +376,145 @@ ingress:
 | 모니터링       | **Uptime Kuma**                    | 서비스 상태 24h 모니터링                     |
 
 
+### Nginx Proxy Manager (NPM) 설치 및 설정
+
+Cloudflare Tunnel이 외부 → 맥미니로 트래픽을 전달하면,  
+NPM이 내부에서 서브도메인별로 각 Docker 컨테이너에 라우팅합니다.
+
+#### 설치 (docker-compose.yml)
+
+```yaml
+# ~/docker/nginx-proxy-manager/docker-compose.yml
+
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: nginx-proxy-manager
+    restart: always
+    ports:
+      - "80:80"       # HTTP
+      - "443:443"     # HTTPS
+      - "81:81"       # NPM 관리 웹 UI
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+```
+
+```bash
+# 실행
+cd ~/docker/nginx-proxy-manager
+docker compose up -d
+
+# 관리 UI 접속 (초기 설정)
+# http://localhost:81
+# 초기 계정: admin@example.com / changeme
+# → 최초 로그인 후 이메일/비밀번호 즉시 변경
+```
+
+---
+
+#### NPM 프록시 호스트 설정 (웹 UI에서 등록)
+
+관리 UI(`localhost:81`) → **Proxy Hosts → Add Proxy Host**
+
+
+| 도메인                | Forward Hostname | Forward Port | 비고          |
+| ------------------ | ---------------- | ------------ | ----------- |
+| `nas.내도메인.org`     | `localhost`      | `8096`       | Jellyfin    |
+| `ai.내도메인.org`      | `localhost`      | `3000`       | Open WebUI  |
+| `monitor.내도메인.org` | `localhost`      | `3100`       | Uptime Kuma |
+| `docker.내도메인.org`  | `localhost`      | `9000`       | Portainer   |
+| `api.내도메인.org`     | `localhost`      | `4001`       | API 서버      |
+| `[앱1].내도메인.org`    | `localhost`      | `3001`       | Docker 앱 1  |
+| `[앱2].내도메인.org`    | `localhost`      | `3002`       | Docker 앱 2  |
+
+
+> Cloudflare Tunnel이 SSL을 처리하므로 NPM에서 SSL 설정은 불필요
+
+---
+
+#### NPM Advanced 설정 (Websocket 사용 앱)
+
+Open WebUI, Portainer 등 WebSocket을 사용하는 앱은 Advanced 탭에 추가:
+
+```nginx
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+---
+
+#### 전체 Docker 인프라 docker-compose.yml
+
+```yaml
+# ~/docker/infra/docker-compose.yml
+# 공통 인프라 서비스 한 번에 실행
+
+services:
+  nginx-proxy-manager:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: npm
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "81:81"
+    volumes:
+      - npm_data:/data
+      - npm_ssl:/etc/letsencrypt
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: always
+    ports:
+      - "9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    container_name: uptime-kuma
+    restart: always
+    ports:
+      - "3100:3001"
+    volumes:
+      - uptime_data:/app/data
+
+volumes:
+  npm_data:
+  npm_ssl:
+  portainer_data:
+  uptime_data:
+```
+
+```bash
+# 인프라 전체 한 번에 실행
+cd ~/docker/infra
+docker compose up -d
+```
+
+---
+
 ### 체크리스트
 
-- OrbStack 또는 Docker Desktop 설치
+- OrbStack 설치 (`brew install orbstack`)
 - Cloudflare 계정 보유
 - 도메인(내도메인.org) 보유 및 Cloudflare DNS 관리 중
 - `cloudflared` 설치 및 터널 생성 (`cloudflared tunnel create macmini`)
-- Cloudflare Tunnel 서비스 자동 시작 등록
-- Nginx Proxy Manager Docker 컨테이너 실행
-- 서비스별 `docker-compose.yml` 작성
+- `~/.cloudflared/config.yml` 작성 (위 템플릿 참고)
+- Cloudflare Tunnel 서비스 자동 시작 등록 (`cloudflared service install`)
+- `~/docker/infra/docker-compose.yml` 작성 후 실행
+- NPM 관리 UI(`localhost:81`) 접속 및 초기 비밀번호 변경
+- NPM 프록시 호스트 서비스별 등록
+- WebSocket 사용 앱(Open WebUI, Portainer) Advanced 설정 추가
+- 서비스별 앱 `docker-compose.yml` 작성
 - 기존 Cursor 프로젝트 `Dockerfile` 작성
-- Portainer 설치 및 접속 확인
-- Uptime Kuma 모니터링 설정
 - 외부(아이폰 등)에서 접속 테스트
 
 ---
@@ -597,14 +819,14 @@ docker compose up -d            docker compose up -d
 
 ### 체크리스트
 
-- [ ] 저장소별 Runner 폴더 생성 (`~/actions-runner-app1`, `app2`, `app3` ...)
-- [ ] 각 저장소에서 Runner 토큰 발급 (Settings → Actions → Runners)
-- [ ] 저장소별 Runner 설치 및 라벨 지정
-- [ ] 모든 Runner `./svc.sh install` 로 자동 시작 등록
-- [ ] 각 저장소에 `.github/workflows/deploy.yml` 작성
-- [ ] 오라클 서버 Runner 등록 (라벨: `oracle`) — 기존 방식 유지
-- [ ] 테스트 커밋으로 저장소별 독립 배포 확인
-- [ ] GitHub Actions 탭에서 Runner 녹색 상태 확인
+- 저장소별 Runner 폴더 생성 (`~/actions-runner-app1`, `app2`, `app3` ...)
+- 각 저장소에서 Runner 토큰 발급 (Settings → Actions → Runners)
+- 저장소별 Runner 설치 및 라벨 지정
+- 모든 Runner `./svc.sh install` 로 자동 시작 등록
+- 각 저장소에 `.github/workflows/deploy.yml` 작성
+- 오라클 서버 Runner 등록 (라벨: `oracle`) — 기존 방식 유지
+- 테스트 커밋으로 저장소별 독립 배포 확인
+- GitHub Actions 탭에서 Runner 녹색 상태 확인
 
 ---
 

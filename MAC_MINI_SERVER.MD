@@ -57,12 +57,12 @@ graph TD
 
 | 역할     | 소프트웨어                              | 설명                     |
 | ------ | ---------------------------------- | ---------------------- |
-| 미디어 서버 | **Plex** 또는 **Jellyfin**           | TV/PC 자동 검색, 스트리밍      |
+| 미디어 서버 | **Jellyfin**                       | 완전 무료, 계정별 라이브러리 접근 제어 |
+| 클라이언트  | **Infuse** (Apple TV / iOS)        | Jellyfin API 연결 — 라이브러리 권한 그대로 적용 |
 | 토렌트 관리 | **qBittorrent** / **Transmission** | 자동 다운로드                |
 | 자동 분류  | **Sonarr** (드라마) / **Radarr** (영화) | 메타데이터 기반 자동 정리         |
 | 인덱서    | **Prowlarr**                       | 토렌트 인덱서 통합 관리          |
-| 파일 공유  | **SMB / AFP** (macOS 내장)           | PC/TV에서 네트워크 드라이브 마운트  |
-| DLNA   | Plex / Jellyfin 내장                 | TV 자동 검색 (삼성/LG TV 호환) |
+| DLNA   | Jellyfin 내장                        | TV 앱 없어도 DLNA 자동 검색 가능 |
 
 
 ### 구현 흐름
@@ -78,25 +78,49 @@ Prowlarr (인덱서 관리)
      └──▶ Radarr (영화 자동 관리)  ──▶ qBittorrent ──▶ 📁 TV_공유/영화/
                                                               │
                                                               ▼
-                                                    Plex / Jellyfin
+                                                         Jellyfin
                                                     (메타데이터 자동 수집)
+                                                    (라이브러리 접근 권한 관리)
                                                               │
-                                          ┌───────────────────┤
-                                          ▼                   ▼
-                                    Apple TV / TV         PC 브라우저
-                                    (DLNA 자동검색)        (웹 UI)
+                                     ┌────────────────────────┤
+                                     ▼                         ▼
+                              Infuse (Apple TV)           PC 브라우저
+                            Jellyfin API 연결              (웹 UI)
+                         계정 권한 기반 라이브러리 노출
 ```
+
+### 라이브러리 접근 권한 구성
+
+Infuse를 SMB 직접 연결이 아닌 **Jellyfin API로 연결**하면 계정별 라이브러리 접근 제어가 적용됩니다.
+
+```
+Jellyfin 라이브러리 설정
+│
+├── 📺 라이브러리 A: TV_공유    → 가족 계정 ✅ / 내 계정 ✅
+└── 🔒 라이브러리 B: 개인_비공개 → 가족 계정 ❌ / 내 계정 ✅
+```
+
+| 접속 계정 | Apple TV Infuse 홈 화면 |
+| --- | --- |
+| **가족 계정** (기본 로그인) | TV_공유 라이브러리만 표시 |
+| **내 계정** (별도 비밀번호) | 전체 라이브러리 표시 |
+
+> ⚠️ Infuse를 SMB 직접 연결로 쓰면 폴더 전부 노출됨 — **반드시 Jellyfin API 연결 방식 사용**
 
 ### 체크리스트
 
-- 외장 HDD 또는 내부 스토리지 확보 (최소 2TB 권장)
-- 외장 드라이브 볼륨 이름 고정 (디스크 유틸리티 → 볼륨 이름 지정: `SSD1`, `SSD2`)
+- 외장 SSD 확보 (exFAT 포맷 — Windows/TV 호환)
+- 외장 드라이브 볼륨 이름 고정 (디스크 유틸리티 → `SSD1`, `SSD2`)
 - 재부팅 후 자동 마운트 확인 (시스템 설정 → 일반 → 로그인 항목에서 드라이브 추가)
-- Homebrew 설치
-- Docker Desktop (Mac) 설치
-- Plex 또는 Jellyfin 설치 및 설정
-- TV_공유 / 개인_비공개 폴더 권한 분리 설정
-- DLNA 활성화 및 TV 연결 테스트
+- Jellyfin Docker 컨테이너 실행
+- Jellyfin 라이브러리 설정
+  - 라이브러리 A: `TV_공유` → 가족 계정 접근 허용
+  - 라이브러리 B: `개인_비공개` → 내 계정만 허용
+- Jellyfin 사용자 계정 생성 (가족 계정 / 내 계정 분리)
+- **Infuse(Apple TV) → Jellyfin API 연결** (SMB 직접 연결 사용 금지)
+  - Infuse → 설정 → 공유 추가 → Jellyfin 선택 → 서버 주소 입력
+- 가족 계정 로그인 시 개인_비공개 미노출 확인
+- DLNA 활성화 및 앱 없는 TV 연결 테스트
 - Sonarr + Radarr + Prowlarr 연동
 - **Jellyfin 하드웨어 가속 활성화** (필수 — 미설정 시 4K 재생 시 CPU 폭주)
   - Jellyfin 관리 → 대시보드 → 재생 → 트랜스코딩

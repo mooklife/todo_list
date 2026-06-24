@@ -1,0 +1,21 @@
+# STS 파일럿 테스트 의존성
+# Mac Mini M4 / MacBook Pro Apple Silicon 기준
+
+# 핵심 프레임워크
+torch>=2.3.0
+transformers>=4.51.0
+accelerate>=0.30.0
+huggingface_hub>=0.23.0
+
+# 오디오 처리
+sounddevice>=0.4.7       # 마이크 입력 / 스피커 출력
+soundfile>=0.12.1        # 오디오 파일 읽기/쓰기
+numpy>=1.26.0
+scipy>=1.13.0
+
+# VAD (발화 종료 감지)
+silero-vad>=5.1.0
+
+# 유틸
+tqdm>=4.66.0             # 다운로드 프로그레스바
+python-dotenv>=1.0.0     # 환경변수

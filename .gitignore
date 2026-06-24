@@ -1,0 +1,31 @@
+# ── Python ──────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ── 가상환경 ────────────────────────────────
+venv/
+.venv/
+*-venv/
+sts-pilot-venv/
+
+# ── 모델 가중치 / 캐시 (저장소에 넣지 말 것) ──
+pilot/models/
+*.safetensors
+*.bin
+*.gguf
+.cache/
+huggingface/
+
+# ── 파일럿 생성 산출물 (오디오) ──────────────
+*.wav
+pilot/output_audio.wav
+pilot/output_response.wav
+pilot/sample_input.wav
+
+# ── OS / 에디터 ─────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
